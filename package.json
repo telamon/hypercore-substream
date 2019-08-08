@@ -1,0 +1,43 @@
+{
+  "name": "hypercore-protocol-substream",
+  "version": "1.0.0",
+  "description": "Create independent virtual streams on a hypercore-protocol stream",
+  "main": "index.js",
+  "scripts": {
+    "test": "tape test.js",
+    "debug": "node inspect $(npm bin)/tape test.js",
+    "protobuf": "$(npm bin)/protocol-buffers -o messages.js schema.proto",
+    "lint": "standard"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/telamon/hypercore-protocol-substream.git"
+  },
+  "keywords": [
+    "virtual",
+    "stream",
+    "multiplex",
+    "substream",
+    "hypercore",
+    "protocol",
+    "replication"
+  ],
+  "author": "Tony Ivanov",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/telamon/hypercore-protocol-substream/issues"
+  },
+  "homepage": "https://github.com/telamon/hypercore-protocol-substream#readme",
+  "dependencies": {
+    "debug": "^4.1.1",
+    "hypercore-protocol": "^6.12.0",
+    "protocol-buffers-encodings": "^1.1.0"
+  },
+  "devDependencies": {
+    "end-of-stream": "^1.4.1",
+    "protocol-buffers": "^4.1.0",
+    "pump": "^3.0.0",
+    "standard": "^13.1.0",
+    "tape": "^4.11.0"
+  }
+}

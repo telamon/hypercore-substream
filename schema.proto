@@ -1,0 +1,6 @@
+message SubstreamOp {
+  required uint32 op = 1;
+  required bytes id = 2;
+  bytes data = 3;
+}
+
