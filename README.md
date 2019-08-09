@@ -5,11 +5,13 @@ Independent virtual streams through a hypercore-protocol stream
 
 ## Usage
 ```js
+
+// Substreams can be created on any 
+
 const substream = require('hypercore-protocol-substream')
 const protocol = require('hypercore-protocol')
 const hypercore = require('hyprecore')
 
-// From a replication stream
 const core = hypercore(storage, key)
 
 // Register the substream proto-extension
@@ -19,7 +21,7 @@ const stream = core.replicate({ extensions: [substream.EXTENSION] })
 const virt1 = substream(stream, Buffer.from('beef'))
 
 // Connected event is fired when a virtual stream with the same
-// namespace have been initialized by the remote.
+// namespace have been initialized on the remote end.
 virt1.on('connected', (virt1) => {
   virt1.write('Hello remote!')
 })
@@ -43,19 +45,24 @@ substream(stream, Buffer.from('second'), (err, virtual2) => { // on connect
 
 // Once you've initiated a hypercore-protocol stream with substream's extension
 // You can listen for incoming streams without any knowledge of the namespace.
-stream.on('substream-connected', handshake => {
+const connectionHandler = (handshake) => {
   if (handshake.payload === 'Please Respond') {
     const virtual3 = substream(stream, handshake.id)
+    virtual3.end('Hey!')
   }
-})
+}
+stream.on('substream-connected', connectionHandler)
+stream.once('end', () => stream.off('substream-connected', connectionHandler)
 
-
-// Alternatively create a manual hyperprotocol-stream
+/*
+ * Alternatively create a manual hyperprotocol-stream
+ */
 const key = Buffer.alloc(32)
 key.write('encryption secret')
 const stream2 = protocol({extensions: [substream.EXTENSION]})
 const vFeed = protocol.feed(key) // a main feed needs to be initialized manually
 
+const vitual4 = substream(stream2, Buffer.from('dc'))
 ```
 
 ## API
