@@ -22,7 +22,7 @@ class SubStream extends Duplex {
     super(Object.assign({}, opts, { allowHalfOpen: false }))
     this.pause()
     this.cork()
-
+    if (typeof key === 'string') key = Buffer.from(key)
     this.id = key || randbytes()
     this.state = INIT
     this.lastError = null
