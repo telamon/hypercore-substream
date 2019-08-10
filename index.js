@@ -16,24 +16,24 @@ const OP_CLOSE_STREAM = 3
 const RETRY_INTERVAL = 500
 
 const randbytes = () => Buffer.from(Math.floor((1 << 24) * Math.random()).toString(16), 'hex')
-
 class SubStream extends Duplex {
-  constructor (feed, key, opts = {}) {
+  constructor (feed, name, opts = {}) {
     super(Object.assign({}, opts, { allowHalfOpen: false }))
     this.pause()
     this.cork()
-    if (typeof key === 'string') key = Buffer.from(key)
-    this.id = key || randbytes()
+    if (typeof name === 'string') name = Buffer.from(name)
+    this.name = name || randbytes()
     this.state = INIT
     this.lastError = null
 
     this.feed = feed
     this._onRemoteMessage = this._onRemoteMessage.bind(this)
     feed.on('extension', this._onRemoteMessage)
-
+    this.feed.__subctr = this.feed.__subsctr || 0
+    this.id = encId(++this.feed.__subctr)
     feed.__subChannels = feed.__subChannels || []
     feed.__subChannels.push(this)
-    this.debug = _debug(`substream/${randbytes().hexSlice()}`)
+    this.debug = _debug(`substream/${this.id.hexSlice()}`)
     this.debug('Initializing new substream')
   }
 
@@ -58,14 +58,20 @@ class SubStream extends Duplex {
 
   _sendHandshake () {
     this.debug('Sending handshake')
-    this.feed.extension(EXTENSION, SubstreamOp.encode({ id: this.id, op: OP_START_STREAM }))
+
+    this.feed.extension(EXTENSION, SubstreamOp.encode({
+      id: this.id,
+      op: OP_START_STREAM,
+      data: this.name
+    }))
   }
 
   _sendClosing () {
     this.debug('Sending close stream op')
     this.feed.extension(EXTENSION, SubstreamOp.encode({
       id: this.id,
-      op: OP_CLOSE_STREAM
+      op: OP_CLOSE_STREAM,
+      data: this.name
     }))
   }
 
@@ -131,14 +137,20 @@ class SubStream extends Duplex {
   _onRemoteMessage (ext, chunk) {
     if (ext !== EXTENSION) return
     const msg = SubstreamOp.decode(chunk)
-    if (!this.id.equals(msg.id)) return // not our channel.
+    if (this.rid && !this.rid.equals(msg.id)) return // not our channel.
 
     switch (this.state) {
       case INIT:
-        if (msg.op === OP_DATA) return this._transition(CLOSING, new Error('Channel recieved data before handshake'))
-        if (msg.op === OP_CLOSE_STREAM) return this._transition(CLOSING)
-        // this.remoteData = msg.data
-        this._transition(ESTABLISHED)
+        if (this.name.equals(msg.data)) {
+          switch (msg.op) {
+            case OP_START_STREAM:
+              this.rid = msg.id // link remote channel to this channel
+              this._transition(ESTABLISHED)
+              break
+            case OP_CLOSE_STREAM:
+              this._transition(CLOSING)
+          }
+        }
         break
       case ESTABLISHED:
         switch (msg.op) {
@@ -198,3 +210,6 @@ const substream = (feed, key, opts = {}, cb) => {
 module.exports = substream
 module.exports.EXTENSION = 'substream'
 
+function encId (id) {
+  return Buffer.from([(id >> 8) & 0xff, id & 0xff])
+}
