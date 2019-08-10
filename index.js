@@ -29,7 +29,7 @@ class SubStream extends Duplex {
     this.feed = feed
     this._onRemoteMessage = this._onRemoteMessage.bind(this)
     feed.on('extension', this._onRemoteMessage)
-    this.feed.__subctr = this.feed.__subsctr || 0
+    this.feed.__subctr = this.feed.__subctr || 0
     this.id = encId(++this.feed.__subctr)
     feed.__subChannels = feed.__subChannels || []
     feed.__subChannels.push(this)

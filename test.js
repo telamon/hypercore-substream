@@ -3,6 +3,8 @@ const protocol = require('hypercore-protocol')
 const substream = require('.')
 const pump = require('pump')
 const eos = require('end-of-stream')
+const hypercore = require('hypercore')
+const ram = require('random-access-memory')
 
 test('virtual channels', t => {
   t.plan(23)
@@ -90,4 +92,53 @@ test('virtual channels', t => {
 
   subA1.write(msg1)
   subA2.write(msg2)
+})
+
+test('Stresstest: Multiplexing channels', t => {
+  const nCores = 3
+  t.plan(nCores * 50)
+  let nready = nCores
+  const feeds = Array.from(new Array(nCores))
+    .map((_, i) => {
+      const f = hypercore(ram)
+      f.ready(() => {
+        f.append(`feed_${i}`, err => {
+          t.error(err)
+          if (!--nready) repl()
+        })
+      })
+      return f
+    })
+  const key = Buffer.alloc(32)
+  key.write('encryption secret')
+
+  const stream1 = protocol({
+    extensions: [substream.EXTENSION]
+  })
+
+  const vfeed1 = stream1.feed(key)
+
+  function repl () {
+    let nfinished = nCores
+    feeds.forEach((f, i) => {
+      substream(vfeed1, Buffer.from('beef'), (err, sub) => {
+        t.error(err)
+        if (err) return
+        const fstream = f.replicate()
+        pump(sub, fstream, sub, err => {
+          t.error(err)
+          f.get(0, (err, data) => {
+            t.error(err)
+            t.equal(data.toString('utf8'), `feed_${i}`)
+            if (!--nfinished) finishUp()
+          })
+        })
+      })
+    })
+  }
+
+  function finishUp () {
+    debugger
+    t.end()
+  }
 })
