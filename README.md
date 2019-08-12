@@ -45,14 +45,16 @@ substream(stream, Buffer.from('second'), (err, virtual2) => { // on connect
 
 // Once you've initiated a hypercore-protocol stream with substream's extension
 // You can listen for incoming streams without any knowledge of the namespace.
-const connectionHandler = (handshake) => {
-  if (handshake.payload === 'Please Respond') {
-    const virtual3 = substream(stream, handshake.id)
+
+const connectionHandler = (namespace) => {
+  if (namespace == 'Awsomechat') {
+    const virtual3 = substream(stream, namespace)
     virtual3.end('Hey!')
   }
 }
-stream.on('substream-connected', connectionHandler)
-stream.once('end', () => stream.off('substream-connected', connectionHandler)
+
+stream.on('substream-discovered', connectionHandler)
+stream.once('end', () => stream.off('substream-discovered', connectionHandler))
 
 /*
  * Alternatively create a manual hyperprotocol-stream

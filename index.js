@@ -1,8 +1,10 @@
 const _debug = require('debug')
 const assert = require('assert')
+const eos = require('end-of-stream')
 const { Duplex } = require('stream')
 const { nextTick } = process
 const { SubstreamOp } = require('./messages')
+
 const EXTENSION = 'substream'
 const INIT = 'INIT'
 const ESTABLISHED = 'ESTABLISHED'
@@ -15,36 +17,104 @@ const OP_CLOSE_STREAM = 3
 
 const RETRY_INTERVAL = 500
 
+class SubstreamRouter {
+  constructor (feed) {
+    this.subs = []
+    this._ridTable = {}
+    this._nameTable = {}
+
+    this.feed = feed
+    this._onExtension = this._onExtension.bind(this)
+    this._onDestroyed = this._onDestroyed.bind(this)
+    this.feed.once('close', this._onDestroyed)
+    this.feed.on('extension', this._onExtension)
+  }
+
+  addSub (sub) {
+    sub.id = this.subs.push(sub) - 1
+    this._nameTable[sub.name] = sub
+  }
+
+  delSub (sub) {
+    if (typeof sub.rid !== 'undefined') {
+      delete this._ridTable[sub.rid]
+    }
+    delete this._nameTable[sub.name]
+    this.subs[sub.id] = null
+  }
+
+  _onDestroyed () {
+    this.feed.off('extension', this._onExtension)
+    delete this.feed.__subrouter
+
+    this.subs.forEach(i => {
+      if (i) this.delSub(i)
+    })
+    delete this.feed
+    delete this.subs
+    delete this
+  }
+
+  _onExtension (ext, chunk) {
+    if (ext !== EXTENSION) return
+    const msg = SubstreamOp.decode(chunk)
+    const remoteId = decId(msg.id)
+    if (msg.op === OP_START_STREAM) {
+      const sub = this._nameTable[msg.data.toString('utf8')]
+      if (!sub) return this.emitStream('substream-discovered', msg.data.toString('utf8'))
+
+      // Link remote sub to local sub
+      if (sub.state === INIT) {
+        sub.rid = remoteId
+        this._ridTable[remoteId] = sub
+        sub._transition(ESTABLISHED)
+      } // else ignore message
+    } else {
+      const sub = this._ridTable[remoteId]
+      if (!sub) return
+      sub._onMessage(msg)
+    }
+  }
+
+  transmit (buffer) {
+    this.feed.extension(EXTENSION, buffer)
+  }
+
+  emitStream (ev, ...payload) {
+    this.feed.stream.emit(ev, ...payload)
+  }
+}
+
 const randbytes = () => Buffer.from(Math.floor((1 << 24) * Math.random()).toString(16), 'hex')
 class SubStream extends Duplex {
   constructor (feed, name, opts = {}) {
     super(Object.assign({}, opts, { allowHalfOpen: false }))
     this.pause()
     this.cork()
+
     if (typeof name === 'string') name = Buffer.from(name)
     this.name = name || randbytes()
     this.state = INIT
     this.lastError = null
 
-    this.feed = feed
-    this._onRemoteMessage = this._onRemoteMessage.bind(this)
-    feed.on('extension', this._onRemoteMessage)
-    this.feed.__subctr = this.feed.__subctr || 0
-    this.id = encId(++this.feed.__subctr)
-    feed.__subChannels = feed.__subChannels || []
-    feed.__subChannels.push(this)
-    this.debug = _debug(`substream/${this.id.hexSlice()}`)
+    // Install router into feed if missing.
+    if (!feed.__subrouter) {
+      feed.__subrouter = new SubstreamRouter(feed)
+    }
+    this.router = feed.__subrouter
+    this.router.addSub(this)
+    this.debug = _debug(`substream/${this.id}`)
     this.debug('Initializing new substream')
   }
 
   _write (chunk, enc, done) {
     // this.debug('DATA sub => remote', chunk.toString())
     const bin = SubstreamOp.encode({
-      id: this.id,
+      id: encId(this.id),
       op: OP_DATA,
       data: chunk
     })
-    this.feed.extension(EXTENSION, bin)
+    this.router.transmit(bin)
     nextTick(done)
   }
 
@@ -59,8 +129,8 @@ class SubStream extends Duplex {
   _sendHandshake () {
     this.debug('Sending handshake')
 
-    this.feed.extension(EXTENSION, SubstreamOp.encode({
-      id: this.id,
+    this.router.transmit(SubstreamOp.encode({
+      id: encId(this.id),
       op: OP_START_STREAM,
       data: this.name
     }))
@@ -68,8 +138,8 @@ class SubStream extends Duplex {
 
   _sendClosing () {
     this.debug('Sending close stream op')
-    this.feed.extension(EXTENSION, SubstreamOp.encode({
-      id: this.id,
+    this.router.transmit(SubstreamOp.encode({
+      id: encId(this.id),
       op: OP_CLOSE_STREAM,
       data: this.name
     }))
@@ -88,7 +158,7 @@ class SubStream extends Duplex {
             this.resume()
             this.state = nstate
             this.emit('connected')
-            this.feed.stream.emit('substream-connected', this)
+            this.router.emitStream('substream-connected', this)
             this.debug('Received hanshake from remote, INITIALIZED!')
             break
           case CLOSING:
@@ -119,11 +189,10 @@ class SubStream extends Duplex {
               this.push(null) // end readable
               this.end() // end writable
             }
-            this.feed.off('extension', this._onRemoteMessage)
             this.state = nstate
-            this.feed.__subChannels.splice(this.feed.__subChannels.indexOf(this), 1)
+            this.router.delSub(this)
             if (typeof finalize === 'function') finalize()
-            this.feed.stream.emit('substream-disconnected', this)
+            this.router.emitStream('substream-disconnected', this)
             break
           default:
             throw new Error('IllegalTransitionError' + nstate)
@@ -134,24 +203,10 @@ class SubStream extends Duplex {
     }
   }
 
-  _onRemoteMessage (ext, chunk) {
-    if (ext !== EXTENSION) return
-    const msg = SubstreamOp.decode(chunk)
-    if (this.rid && !this.rid.equals(msg.id)) return // not our channel.
-
+  _onMessage (msg) {
     switch (this.state) {
       case INIT:
-        if (this.name.equals(msg.data)) {
-          switch (msg.op) {
-            case OP_START_STREAM:
-              this.rid = msg.id // link remote channel to this channel
-              this._transition(ESTABLISHED)
-              break
-            case OP_CLOSE_STREAM:
-              this._transition(CLOSING)
-          }
-        }
-        break
+        throw new Error('Impossible state, BUG!')
       case ESTABLISHED:
         switch (msg.op) {
           case OP_DATA:
@@ -212,4 +267,8 @@ module.exports.EXTENSION = 'substream'
 
 function encId (id) {
   return Buffer.from([(id >> 8) & 0xff, id & 0xff])
+}
+
+function decId (id) {
+  return id[0] << 8 | id[1]
 }

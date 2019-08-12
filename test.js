@@ -94,16 +94,16 @@ test('virtual channels', t => {
   subA2.write(msg2)
 })
 
-test('Stresstest: Multiplexing channels', t => {
-  const nCores = 3
-  t.plan(nCores * 50)
+test.only('Stresstest: Multiplexing channels', t => {
+  const nCores = 300
+  t.plan(1 + nCores * 8)
   let nready = nCores
   const feeds = Array.from(new Array(nCores))
     .map((_, i) => {
       const f = hypercore(ram)
       f.ready(() => {
         f.append(`feed_${i}`, err => {
-          t.error(err)
+          t.error(err, `testdata ${i} written`)
           if (!--nready) repl()
         })
       })
@@ -113,32 +113,53 @@ test('Stresstest: Multiplexing channels', t => {
   key.write('encryption secret')
 
   const stream1 = protocol({
-    extensions: [substream.EXTENSION]
+    extensions: [substream.EXTENSION],
+    live: true
   })
 
   const vfeed1 = stream1.feed(key)
 
+  const stream2 = protocol({
+    extensions: [substream.EXTENSION],
+    live: true
+  })
+  const vfeed2 = stream2.feed(key)
+
   function repl () {
-    let nfinished = nCores
-    feeds.forEach((f, i) => {
-      substream(vfeed1, Buffer.from('beef'), (err, sub) => {
-        t.error(err)
+    let nfin = nCores
+    feeds.forEach((localFeed, i) => {
+      // Create local substream and replicate
+      substream(vfeed1, localFeed.discoveryKey, (err, localSub) => {
+        t.error(err, `local sub ${i} established`)
         if (err) return
-        const fstream = f.replicate()
-        pump(sub, fstream, sub, err => {
+        pump(localSub, localFeed.replicate(), localSub, err => {
+          t.error(err, `successfully replicated local ${i}`)
+        })
+      })
+
+      // Create remote substream and replicate then verify
+      const remoteFeed = hypercore(ram, localFeed.key)
+      substream(vfeed2, localFeed.discoveryKey, (err, remoteSub) => {
+        t.error(err)
+        pump(remoteSub, remoteFeed.replicate(), remoteSub, err => {
           t.error(err)
-          f.get(0, (err, data) => {
+          remoteFeed.get(0, (err, rdata) => {
             t.error(err)
-            t.equal(data.toString('utf8'), `feed_${i}`)
-            if (!--nfinished) finishUp()
+            localFeed.get(0, (err, ldata) => {
+              t.error(err)
+              t.ok(rdata.equals(ldata), `Data ${i} verified`)
+              if (!--nfin) {
+                stream2.end()
+              }
+            })
           })
         })
       })
     })
   }
 
-  function finishUp () {
-    debugger
-    t.end()
-  }
+  pump(stream1, stream2, stream1, err => {
+    t.error(err)
+    t.end() // end test when main streams end.
+  })
 })
