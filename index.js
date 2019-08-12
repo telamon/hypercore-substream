@@ -1,6 +1,5 @@
 const _debug = require('debug')
 const assert = require('assert')
-const eos = require('end-of-stream')
 const { Duplex } = require('stream')
 const { nextTick } = process
 const { SubstreamOp } = require('./messages')
@@ -50,9 +49,6 @@ class SubstreamRouter {
     this.subs.forEach(i => {
       if (i) this.delSub(i)
     })
-    delete this.feed
-    delete this.subs
-    delete this
   }
 
   _onExtension (ext, chunk) {

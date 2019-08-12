@@ -28,12 +28,10 @@ test('virtual channels', t => {
 
   const subA2 = substream(vfeed2, Buffer.from('beef'))
 
-
   const msg1 = Buffer.from('Hello from localhost')
   const msg2 = Buffer.from('Hello from remotehost')
   const msg3 = Buffer.from('SubA1 end')
   const msg4 = Buffer.from('SubA2 end')
-
 
   let pending = 4
   const finish = () => {
@@ -83,7 +81,7 @@ test('virtual channels', t => {
     subA2.once('data', chunk => {
       t.equal(chunk.toString('utf8'), msg3.toString('utf8'), 'Message 3 transmitted')
     })
-     subA2.end(msg4, err => {
+    subA2.end(msg4, err => {
       t.error(err)
       t.ok(true, 'SubA2 local - Finish()')
       finish()
