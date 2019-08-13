@@ -18,7 +18,7 @@ const core = hypercore(storage, key)
 const stream = core.replicate({ extensions: [substream.EXTENSION] })
 
 // Initialize new virtual stream as namespace 'beef'
-const virt1 = substream(stream, Buffer.from('beef'))
+const virt1 = substream(stream, 'beef')
 
 // Connected event is fired when a virtual stream with the same
 // namespace have been initialized on the remote end.
@@ -36,7 +36,7 @@ virt1.end('bye bye')
 
 
 // Alternative initializer
-substream(stream, Buffer.from('second'), (err, virtual2) => { // on connect
+substream(stream, 'second', (err, virtual2) => { // on connect
   if (err) throw err
   const replStream = core.replicate({ live: true })
   replStream.pipe(virtual2).pipe(replStream) // replicate as usual.
@@ -57,14 +57,14 @@ stream.on('substream-discovered', connectionHandler)
 stream.once('end', () => stream.off('substream-discovered', connectionHandler))
 
 /*
- * Alternatively create a manual hyperprotocol-stream
+ * Alternatively initialize a hyperprotocol-stream manually
  */
 const key = Buffer.alloc(32)
 key.write('encryption secret')
 const stream2 = protocol({extensions: [substream.EXTENSION]})
 const vFeed = protocol.feed(key) // a main feed needs to be initialized manually
 
-const vitual4 = substream(stream2, Buffer.from('dc'))
+const vitual4 = substream(stream2, 'foo')
 ```
 
 ## API
@@ -79,13 +79,14 @@ your data.
 `opts` Object
 ```js
   {
-    timeout: 5000 // Time to spend in init for remote to answer the call.
+    timeout: 5000 // Time to wait for remote to answer the call.
                   // causes 'HandshakeTimeoutError' error to be emitted
   }
 ```
 
 `callback` optional `function (error, virtualStream)`
-that will be called when stream becomes either
+
+If provided, will be called when stream becomes either
 active or fails to initialize.
 
 #### `VirtualStream` event `connected`
@@ -95,18 +96,25 @@ Note: the sub stream is initialized in corked and paused state.
 It is resumed and uncorked after the `connected` event has been fired.
 
 
+#### `MainStream` event `substream-discovered`
+
+Once your main stream has been initialized with the extension
+`substream.EXTENSION` - the `substream-discovered` event will be fired
+whenever a remote peer sends a `handshake`
+
+#### `MainStream` event `substream-connected`
+
+Once your main stream has been initialized with the extension
+`substream.EXTENSION` - the `substream-connected` event will be fired
+whenever a virtual stream enters state `ESTABLISHED`
+
+
 #### `MainStream` event `substream-disconnected`
 
 Once your main stream has been initialized with the extension
 `substream.EXTENSION` - the `substream-connected` event will be fired
 whenever an active virtual stream is disconnected either on your or the remote's
 end.
-
-#### `MainStream` event `substream-connected`
-
-Once your main stream has been initialized with the extension
-`substream.EXTENSION` - the `substream-connected` event will be fired
-whenever a virtual stream on the remote peer sends a `handshake`
 
 
 ## License

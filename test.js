@@ -21,7 +21,7 @@ test('virtual channels', t => {
   const vfeed2 = stream2.feed(key)
 
   // Initialize virtual substreams
-  const subA1 = substream(vfeed1, Buffer.from('beef'), (err, sub) => {
+  const subA1 = substream(vfeed1, 'beef', (err, sub) => {
     t.error(err)
     t.ok(sub, 'Callback invoked')
   })
