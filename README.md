@@ -5,9 +5,6 @@ Independent virtual streams through a hypercore-protocol stream
 
 ## Usage
 ```js
-
-// Substreams can be created on any 
-
 const substream = require('hypercore-protocol-substream')
 const protocol = require('hypercore-protocol')
 const hypercore = require('hyprecore')
