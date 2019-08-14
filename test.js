@@ -92,7 +92,7 @@ test('virtual channels', t => {
   subA2.write(msg2)
 })
 
-test.only('Stresstest: Multiplexing channels', t => {
+test('Stresstest: Multiplexing channels', t => {
   const nCores = 300
   t.plan(1 + nCores * 8)
   let nready = nCores
@@ -161,3 +161,4 @@ test.only('Stresstest: Multiplexing channels', t => {
     t.end() // end test when main streams end.
   })
 })
+

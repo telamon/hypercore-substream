@@ -4,71 +4,136 @@ Independent virtual streams through a hypercore-protocol stream
 
 
 ## Usage
+
+#### Dedicated primary feed for communication
+
+Creating a substream through a manually instantiated `hypercore-protocol`
+instance.
+
 ```js
 const substream = require('hypercore-protocol-substream')
 const protocol = require('hypercore-protocol')
-const hypercore = require('hyprecore')
 
-const core = hypercore(storage, key)
+// Any buffer will effectively do for encryption
+const key = Buffer.alloc(32)
+key.write('encryption secret')
 
-// Register the substream proto-extension
-const stream = core.replicate({ extensions: [substream.EXTENSION] })
+// Create a protocol stream with the substream extension
+const stream = protocol({extensions: [substream.EXTENSION]})
+
+
+// Create a primary feed with an encryption key
+const virtualFeed = protocol.feed(key)
 
 // Initialize new virtual stream as namespace 'beef'
-const virt1 = substream(stream, 'beef')
+const sub1 = substream(virtualFeed, 'beef')
 
-// Connected event is fired when a virtual stream with the same
+// 'connected' event is fired when a virtual stream with the same
 // namespace have been initialized on the remote end.
-virt1.on('connected', (virt1) => {
-  virt1.write('Hello remote!')
+sub1.on('connected', (sub1) => {
+  sub1.write('Hello remote!')
 })
 
 // A virtual stream is a regular full-duplex stream
-virt1.on('data', console.log)
-virt1.on('error', console.error)
-virt1.on('end', console.log('Stream has ended'))
+sub1.on('data', console.log)
+sub1.on('error', console.error)
 
 // Ending the stream in one end, also signals end to the remote.
-virt1.end('bye bye')
+sub1.end('bye bye')
 
+// Create another substream using callback-style initializer
+substream(virtualFeed, 'pictures', (error, sub2) => {
+  if (error) throw error
 
-// Alternative initializer
-substream(stream, 'second', (err, virtual2) => { // on connect
-  if (err) throw err
-  const replStream = core.replicate({ live: true })
-  replStream.pipe(virtual2).pipe(replStream) // replicate as usual.
+  const core = hypercore(ram)
+
+  core.ready(() => {
+    // cores can be replicated transparently through a substream tunnel
+    sub2.pipe(core.replicate()).pipe(sub2)
+  })
+
+  // Hypercore 'finished' events can be caught using the substream 'end' event.
+  sub2.on('end', err => {
+    if (err) throw err
+    else console.log('Core replicated through substream successfully')
+  })
 })
 
 
-// Once you've initiated a hypercore-protocol stream with substream's extension
-// You can listen for incoming streams without any knowledge of the namespace.
+// Don't forget to connect the main stream to a valid endpoint
+stream.pipe(remotePeerStream).pipe(stream)
+```
 
+#### Using an existing feed for communication
+
+Alternatively you can piggyback onto another core's replication stream
+as long as it supports forwarding the `extensions` hypercore-protocol option
+on it's `replicate()` method.
+
+But you will also need to tell the hypercore replication stream to stay open
+after it finished it's own replication, either by opening it in `live` mode
+or incrementing the `stream.expectedFeeds`
+
+```js
+const realCore = hypercore(ram)
+
+realCore.ready(() => {
+  // create a replication stream that won't prematurely close
+  // and has our extension registered
+  const stream = realCore.replicate({ live: true, extensions: [substream.EXTENSION] })
+
+  // Hijack the primary feed from the stream.
+  // (a cleaner way should be possible)
+  const primary = stream.feeds[0]
+
+  // create substreams on the hijacked feed
+  substream(primary, 'piggyback', (err, virtual) => {
+    if (err) throw err
+
+    const drive = hyperdrive(ram)
+    drive.ready(() => {
+        virtual.pipe(drive.replicate()).pipe(virtual)
+    })
+
+    // Signal to close the real stream when our sub is done.
+    virtual.on('end', err => stream.end(end))
+  })
+
+})
+
+```
+
+#### Listening for incoming substreams
+
+Once you have an initialize hypercore-protocol `stream` with
+the substream router installed.
+
+You can listen for incoming streams without any prior knowledge of the namespace.
+
+```js
 const connectionHandler = (namespace) => {
   if (namespace == 'Awsomechat') {
-    const virtual3 = substream(stream, namespace)
-    virtual3.end('Hey!')
+    substream(virtualFeed, namespace, (err, sub) => {
+      sub.end('I like awesome topics!')
+    })
   }
 }
 
 stream.on('substream-discovered', connectionHandler)
 stream.once('end', () => stream.off('substream-discovered', connectionHandler))
-
-/*
- * Alternatively initialize a hyperprotocol-stream manually
- */
-const key = Buffer.alloc(32)
-key.write('encryption secret')
-const stream2 = protocol({extensions: [substream.EXTENSION]})
-const vFeed = protocol.feed(key) // a main feed needs to be initialized manually
-
-const vitual4 = substream(stream2, 'foo')
 ```
+( Please open an issue if you're interested in formalizing this feature, I'm not
+intending to use this myself right now. )
+
 
 ## API
 
-#### `substream(stream, namespace, opts, callback')`
+#### `substream(protofeed, namespace, opts, callback')`
 
-`stream` a hypercore-protocol stream
+`protofeed` A hypercore-protocol [feed
+instance](https://github.com/mafintosh/hypercore-protocol/blob/master/feed.js)
+or compatible that supports listening on
+[`extension` events](https://github.com/mafintosh/hypercore-protocol#feedonextension-name-message) and sending extensions messages through [`extension(name, data)`](https://github.com/mafintosh/hypercore-protocol#feedextensionname-message)
 
 `namespace` a buffer, keep it short if possible, as it produces overhead on
 your data.

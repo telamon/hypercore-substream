@@ -221,12 +221,20 @@ class SubStream extends Duplex {
   }
 }
 
-const substream = (feed, key, opts = {}, cb) => {
-  if (typeof key === 'function') return substream(feed, undefined, undefined, key)
-  if (typeof opts === 'function') return substream(feed, key, undefined, opts)
-  assert(typeof feed.extension === 'function')
+/*
+ * protofeed refers to an instance of a 'protocol'-feed:
+ * https://github.com/mafintosh/hypercore-protocol/blob/master/feed.js
+ * an object that belongs to the stream, and emits/writes 'extension' messages
+ */
+const substream = (feed, name, opts = {}, cb) => {
+  if (typeof name === 'function') return substream(feed, undefined, undefined, name)
+  if (typeof opts === 'function') return substream(feed, name, undefined, opts)
+
+  // assert that we received a protofeed instance.
+  assert(typeof feed.extension === 'function', 'dosen\'t quack like a hypercore-protocol feed instance')
   assert(feed.stream)
-  const sub = new SubStream(feed, key, opts, cb)
+
+  const sub = new SubStream(feed, name, opts, cb)
 
   if (typeof cb === 'function') {
     let invkd = false
