@@ -135,8 +135,7 @@ instance](https://github.com/mafintosh/hypercore-protocol/blob/master/feed.js)
 or compatible that supports listening on
 [`extension` events](https://github.com/mafintosh/hypercore-protocol#feedonextension-name-message) and sending extensions messages through [`extension(name, data)`](https://github.com/mafintosh/hypercore-protocol#feedextensionname-message)
 
-`namespace` a buffer, keep it short if possible, as it produces overhead on
-your data.
+`namespace` a string or buffer identifying the channel.
 
 `opts` Object
 ```js
