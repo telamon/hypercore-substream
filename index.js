@@ -18,6 +18,7 @@ const RETRY_INTERVAL = 500
 
 class SubstreamRouter {
   constructor (feed) {
+    this.id = randbytes()
     this.subs = []
     this._ridTable = {}
     this._nameTable = {}
@@ -55,7 +56,9 @@ class SubstreamRouter {
     if (ext !== EXTENSION) return
     const msg = SubstreamOp.decode(chunk)
     const remoteId = decId(msg.id)
+
     if (msg.op === OP_START_STREAM) {
+      // console.log('Received hanshake ns:', msg.data.hexSlice)
       const sub = this._nameTable[msg.data.toString('utf8')]
       if (!sub) return this.emitStream('substream-discovered', msg.data.toString('utf8'))
 
@@ -88,18 +91,14 @@ class SubStream extends Duplex {
     this.pause()
     this.cork()
 
-    if (typeof name === 'string') name = Buffer.from(name)
     this.name = name || randbytes()
     this.state = INIT
     this.lastError = null
 
-    // Install router into feed if missing.
-    if (!feed.__subrouter) {
-      feed.__subrouter = new SubstreamRouter(feed)
-    }
     this.router = feed.__subrouter
     this.router.addSub(this)
-    this.debug = _debug(`substream/${this.id}`)
+
+    this.debug = _debug(`substream/R ${this.router.id.hexSlice(0, 2)} S ${this.id}`)
     this.debug('Initializing new substream')
   }
 
@@ -119,11 +118,13 @@ class SubStream extends Duplex {
   }
 
   _read (size) {
-    this.debug('sub read req')
+    // I don't know if it matters that we completely ignore
+    // the client reads and sizes.
+    // this.debug('sub read req', size)
   }
 
   _sendHandshake () {
-    this.debug('Sending handshake')
+    this.debug('Sending handshake, ns:', this.name.hexSlice())
 
     this.router.transmit(SubstreamOp.encode({
       id: encId(this.id),
@@ -155,7 +156,6 @@ class SubStream extends Duplex {
             this.state = nstate
             this.emit('connected')
             this.router.emitStream('substream-connected', this)
-            this.debug('Received hanshake from remote, INITIALIZED!')
             break
           case CLOSING:
             this.state = nstate
@@ -201,8 +201,6 @@ class SubStream extends Duplex {
 
   _onMessage (msg) {
     switch (this.state) {
-      case INIT:
-        throw new Error('Impossible state, BUG!')
       case ESTABLISHED:
         switch (msg.op) {
           case OP_DATA:
@@ -215,6 +213,13 @@ class SubStream extends Duplex {
             break
         }
         break
+
+      case CLOSING:
+        // If we're already closing we can ignore the
+        // closing echos from the other end.
+        if (msg.op === OP_CLOSE_STREAM) break
+        // else fall through to invalid state error
+      case INIT:
       case END:
         throw new Error('Impossible state, BUG!')
     }
@@ -233,6 +238,23 @@ const substream = (feed, name, opts = {}, cb) => {
   // assert that we received a protofeed instance.
   assert(typeof feed.extension === 'function', 'dosen\'t quack like a hypercore-protocol feed instance')
   assert(feed.stream)
+
+  if (typeof name === 'string') name = Buffer.from(name)
+  assert(Buffer.isBuffer(name), '"namespace" must be a String or a Buffer')
+
+
+  // Install router into feed if missing.
+  if (!feed.__subrouter) {
+    feed.__subrouter = new SubstreamRouter(feed)
+  }
+
+  // Detect duplicate namespaces
+  const router = feed.__subrouter
+  if (router._nameTable[name.toString('utf8')]) {
+    const err = new NamespaceConflictError(name)
+    if (typeof cb === 'function') return cb(err)
+    else throw err
+  }
 
   const sub = new SubStream(feed, name, opts, cb)
 
@@ -275,4 +297,15 @@ function encId (id) {
 
 function decId (id) {
   return id[0] << 8 | id[1]
+}
+
+class NamespaceConflictError extends Error {
+  constructor (name, ...params) {
+    const msg = 'A substream with the same already exists on this feed'
+    super(msg, ...params)
+    this.conflict = name
+    // Maintains proper stack trace for where our error was thrown (only available on V8)
+    if (Error.captureStackTrace) Error.captureStackTrace(this, NamespaceConflictError)
+    this.name = this.type = 'NamespaceConflictError'
+  }
 }

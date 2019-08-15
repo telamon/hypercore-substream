@@ -162,3 +162,21 @@ test('Stresstest: Multiplexing channels', t => {
   })
 })
 
+test('duplicate namespace should throw NamespaceConflictError', t => {
+  const key = Buffer.alloc(32)
+  key.write('encryption secret')
+
+  const stream1 = protocol({
+    extensions: [substream.EXTENSION]
+  })
+  const vfeed1 = stream1.feed(key)
+  const sub1 = substream(vfeed1, 'dupe')
+  sub1.once('error', t.error)
+  t.ok(sub1)
+  substream(vfeed1, 'dupe', (err, sub2) => {
+    t.equal(err.type, 'NamespaceConflictError')
+    t.notOk(sub2, 'Callback invoked')
+    sub1.end()
+    t.end()
+  })
+})
