@@ -14,11 +14,11 @@ const OP_START_STREAM = 1
 const OP_DATA = 2
 const OP_CLOSE_STREAM = 3
 
-const RETRY_INTERVAL = 500
+const RETRY_INTERVAL = 300
 
 class SubstreamRouter {
   constructor (feed) {
-    this.id = randbytes()
+    this.id = randbytes(2).hexSlice()
     this.subs = []
     this._ridTable = {}
     this._nameTable = {}
@@ -100,21 +100,21 @@ class SubstreamRouter {
   }
 }
 
-const randbytes = () => Buffer.from(Math.floor((1 << 24) * Math.random()).toString(16), 'hex')
+const randbytes = (n) => Buffer.from(Array.from(new Array(n)).map(i => Math.floor(0xff * Math.random())))
 class SubStream extends Duplex {
   constructor (feed, name, opts = {}) {
     super(Object.assign({}, opts, { allowHalfOpen: false }))
     this.pause()
     this.cork()
 
-    this.name = name || randbytes()
+    this.name = name || randbytes(32)
     this.state = INIT
     this.lastError = null
 
     this.router = feed.__subrouter
     this.router.addSub(this)
 
-    this.debug = _debug(`substream/R ${this.router.id.hexSlice(0, 2)} S ${this.id}`)
+    this.debug = _debug(`substream/R ${this.router.id} S ${this.id}`)
     this.debug('Initializing new substream')
   }
 
@@ -257,7 +257,6 @@ const substream = (feed, name, opts = {}, cb) => {
   assert(!feed.stream.destroyed, 'Can\'t initalize substream on an already destroyed stream')
   if (typeof name === 'string') name = Buffer.from(name)
   assert(Buffer.isBuffer(name), '"namespace" must be a String or a Buffer')
-
 
   // Install router into feed if missing.
   if (!feed.__subrouter) {
