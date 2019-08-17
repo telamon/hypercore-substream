@@ -26,8 +26,10 @@ class SubstreamRouter {
     this.feed = feed
     this._onExtension = this._onExtension.bind(this)
     this._onDestroyed = this._onDestroyed.bind(this)
+    this._onUnpipe = this._onUnpipe.bind(this)
     this.feed.once('close', this._onDestroyed)
     this.feed.on('extension', this._onExtension)
+    this.feed.stream.on('unpipe', this._onUnpipe)
   }
 
   addSub (sub) {
@@ -36,11 +38,22 @@ class SubstreamRouter {
   }
 
   delSub (sub) {
+    if (sub.state === INIT || sub.state === ESTABLISHED) {
+      console.warn('Warn: mainstream closed while substream was initializing or active')
+      sub._transition(CLOSING)
+    }
     if (typeof sub.rid !== 'undefined') {
       delete this._ridTable[sub.rid]
     }
     delete this._nameTable[sub.name]
     this.subs[sub.id] = null
+  }
+
+  // Forward unpipe events to active substreams
+  _onUnpipe (src) {
+    this.subs.forEach(s => {
+      if (s) s.emit('unpipe', src)
+    })
   }
 
   _onDestroyed () {
@@ -76,6 +89,9 @@ class SubstreamRouter {
   }
 
   transmit (buffer) {
+    if (!this.feed.stream.writable) {
+      return console.warn('Substream trying to write to non writable stream')
+    }
     this.feed.extension(EXTENSION, buffer)
   }
 
@@ -238,7 +254,7 @@ const substream = (feed, name, opts = {}, cb) => {
   // assert that we received a protofeed instance.
   assert(typeof feed.extension === 'function', 'dosen\'t quack like a hypercore-protocol feed instance')
   assert(feed.stream)
-
+  assert(!feed.stream.destroyed, 'Can\'t initalize substream on an already destroyed stream')
   if (typeof name === 'string') name = Buffer.from(name)
   assert(Buffer.isBuffer(name), '"namespace" must be a String or a Buffer')
 
