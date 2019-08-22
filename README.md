@@ -23,7 +23,7 @@ const stream = protocol({extensions: [substream.EXTENSION]})
 
 
 // Create a primary feed with an encryption key
-const virtualFeed = protocol.feed(key)
+const virtualFeed = stream.feed(key)
 
 // Initialize new virtual stream as namespace 'beef'
 const sub1 = substream(virtualFeed, 'beef')
