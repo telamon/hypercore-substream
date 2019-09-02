@@ -57,7 +57,7 @@ class SubstreamRouter {
   }
 
   _onDestroyed () {
-    this.feed.off('extension', this._onExtension)
+    this.feed.removeListener('extension', this._onExtension)
     delete this.feed.__subrouter
 
     this.subs.forEach(i => {
