@@ -30,12 +30,12 @@
   "homepage": "https://github.com/telamon/hypercore-protocol-substream#readme",
   "dependencies": {
     "debug": "^4.1.1",
-    "hypercore-protocol": "^6.12.0",
+    "hypercore": "^8.0.2",
+    "hypercore-protocol": "^7.1.0",
     "protocol-buffers-encodings": "^1.1.0"
   },
   "devDependencies": {
     "end-of-stream": "^1.4.1",
-    "hypercore": "^7.6.1",
     "protocol-buffers": "^4.1.0",
     "pump": "^3.0.0",
     "random-access-memory": "^3.1.1",

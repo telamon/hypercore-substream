@@ -3,8 +3,10 @@ const assert = require('assert')
 const { Duplex } = require('stream')
 const { nextTick } = process
 const { SubstreamOp } = require('./messages')
+const { isProtocolStream } = require('hypercore-protocol')
 
-const EXTENSION = 'substream'
+//const EXTENSION = 'substream'
+const EXTENSION = 1100158972 // TODO: Await hyperprotocol-patch
 const INIT = 'INIT'
 const ESTABLISHED = 'ESTABLISHED'
 const CLOSING = 'CLOSING'
@@ -17,19 +19,21 @@ const OP_CLOSE_STREAM = 3
 const RETRY_INTERVAL = 300
 
 class SubstreamRouter {
-  constructor (feed) {
+  constructor (stream, key) {
+    this.stream = stream
+    this.channelKey = key
     this.id = randbytes(2).hexSlice()
     this.subs = []
     this._ridTable = {}
     this._nameTable = {}
-
-    this.feed = feed
-    this._onExtension = this._onExtension.bind(this)
-    this._onDestroyed = this._onDestroyed.bind(this)
+    // Substream extension hogs it's own feed now due to
+    // proto7 handler redesign. TODO: open issue.
+    this.channel = stream.open(key, {
+      onextension: this._onExtension.bind(this),
+      onclose: this._onDestroyed.bind(this)
+    })
     this._onUnpipe = this._onUnpipe.bind(this)
-    this.feed.once('close', this._onDestroyed)
-    this.feed.on('extension', this._onExtension)
-    this.feed.stream.on('unpipe', this._onUnpipe)
+    this.stream.once('unpipe', this._onUnpipe)
   }
 
   addSub (sub) {
@@ -57,8 +61,8 @@ class SubstreamRouter {
   }
 
   _onDestroyed () {
-    this.feed.removeListener('extension', this._onExtension)
-    delete this.feed.__subrouter
+    delete this.stream.__subrouter
+    delete this.stream
 
     this.subs.forEach(i => {
       if (i) this.delSub(i)
@@ -89,20 +93,22 @@ class SubstreamRouter {
   }
 
   transmit (buffer) {
-    if (!this.feed.stream.writable) {
+    // TODO: switch to streamx
+    // streamx does not support writable flag yet
+    /* if (!this.stream.writable) {
       return console.warn('Substream trying to write to non writable stream')
-    }
-    this.feed.extension(EXTENSION, buffer)
+    } */
+    this.channel.extension(EXTENSION, buffer)
   }
 
   emitStream (ev, ...payload) {
-    this.feed.stream.emit(ev, ...payload)
+    this.stream.emit(ev, ...payload)
   }
 }
 
 const randbytes = (n) => Buffer.from(Array.from(new Array(n)).map(i => Math.floor(0xff * Math.random())))
 class SubStream extends Duplex {
-  constructor (feed, name, opts = {}) {
+  constructor (router, name, opts = {}) {
     super(Object.assign({}, opts, { allowHalfOpen: false }))
     this.pause()
     this.cork()
@@ -111,7 +117,7 @@ class SubStream extends Duplex {
     this.state = INIT
     this.lastError = null
 
-    this.router = feed.__subrouter
+    this.router = router
     this.router.addSub(this)
 
     this.debug = _debug(`substream/R ${this.router.id} S ${this.id}`)
@@ -247,31 +253,33 @@ class SubStream extends Duplex {
  * https://github.com/mafintosh/hypercore-protocol/blob/master/feed.js
  * an object that belongs to the stream, and emits/writes 'extension' messages
  */
-const substream = (feed, name, opts = {}, cb) => {
-  if (typeof name === 'function') return substream(feed, undefined, undefined, name)
-  if (typeof opts === 'function') return substream(feed, name, undefined, opts)
+const substream = (stream, name, opts = {}, cb) => {
+  if (typeof opts === 'function') return substream(stream, name, undefined, opts)
 
-  // assert that we received a protofeed instance.
-  assert(typeof feed.extension === 'function', 'dosen\'t quack like a hypercore-protocol feed instance')
-  assert(feed.stream)
-  assert(!feed.stream.destroyed, 'Can\'t initalize substream on an already destroyed stream')
-  if (typeof name === 'string') name = Buffer.from(name)
+  assert(isProtocolStream(stream), 'First argument must be a hypercore-protocol instance')
+  if (typeof name === 'string' || name.length < 32) {
+    const b = Buffer.alloc(32)
+    if (typeof name === 'string') b.write(name)
+    if (Buffer.isBuffer(name)) name.copy(b)
+    name = b
+  }
+  assert(!stream.destroyed, 'Can\'t initalize substream on an already destroyed stream')
   assert(Buffer.isBuffer(name), '"namespace" must be a String or a Buffer')
 
   // Install router into feed if missing.
-  if (!feed.__subrouter) {
-    feed.__subrouter = new SubstreamRouter(feed)
+  if (!stream.__subrouter) {
+    stream.__subrouter = new SubstreamRouter(stream, name)
   }
+  const router = stream.__subrouter
 
   // Detect duplicate namespaces
-  const router = feed.__subrouter
   if (router._nameTable[name.toString('utf8')]) {
     const err = new NamespaceConflictError(name)
     if (typeof cb === 'function') return cb(err)
     else throw err
   }
 
-  const sub = new SubStream(feed, name, opts, cb)
+  const sub = new SubStream(router, name, opts)
 
   if (typeof cb === 'function') {
     let invkd = false
