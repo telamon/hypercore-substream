@@ -35,6 +35,7 @@
     "protocol-buffers-encodings": "^1.1.0"
   },
   "devDependencies": {
+    "decentstack": "^0.7.5",
     "end-of-stream": "^1.4.1",
     "protocol-buffers": "^4.1.0",
     "pump": "^3.0.0",
