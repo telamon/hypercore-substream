@@ -4,7 +4,6 @@ const { Duplex } = require('stream')
 const { nextTick } = process
 const { SubstreamOp } = require('./messages')
 
-const EXTENSION = 'substream'
 const INIT = 'INIT'
 const ESTABLISHED = 'ESTABLISHED'
 const CLOSING = 'CLOSING'
@@ -17,19 +16,18 @@ const OP_CLOSE_STREAM = 3
 const RETRY_INTERVAL = 300
 
 class SubstreamRouter {
-  constructor (feed) {
+  get name () { return 'substream' }
+  constructor (opts = {}) {
+    this.encoding = SubstreamOp
     this.id = randbytes(2).hexSlice()
     this.subs = []
     this._ridTable = {}
     this._nameTable = {}
+    this.handlers = opts
 
-    this.feed = feed
-    this._onExtension = this._onExtension.bind(this)
-    this._onDestroyed = this._onDestroyed.bind(this)
+    // TODO: stream is not guaranteed in extension space
     this._onUnpipe = this._onUnpipe.bind(this)
-    this.feed.once('close', this._onDestroyed)
-    this.feed.on('extension', this._onExtension)
-    this.feed.stream.on('unpipe', this._onUnpipe)
+    // this.stream.once('unpipe', this._onUnpipe)
   }
 
   addSub (sub) {
@@ -57,28 +55,30 @@ class SubstreamRouter {
   }
 
   _onDestroyed () {
-    this.feed.removeListener('extension', this._onExtension)
-    delete this.feed.__subrouter
+    delete this.stream.__subrouter
+    delete this.stream
 
     this.subs.forEach(i => {
       if (i) this.delSub(i)
     })
   }
 
-  _onExtension (ext, chunk) {
-    if (ext !== EXTENSION) return
-    const msg = SubstreamOp.decode(chunk)
+  onmessage (msg, peer) {
     const remoteId = decId(msg.id)
 
     if (msg.op === OP_START_STREAM) {
       // console.log('Received hanshake ns:', msg.data.hexSlice)
       const sub = this._nameTable[msg.data.toString('utf8')]
-      if (!sub) return this.emitStream('substream-discovered', msg.data.toString('utf8'))
+      if (!sub) {
+        if (typeof this.handlers.onsubdiscovery === 'function') this.handlers.onsubdiscovery(msg.data.toString('utf8'), peer)
+        return
+      }
 
       // Link remote sub to local sub
       if (sub.state === INIT) {
         sub.rid = remoteId
         this._ridTable[remoteId] = sub
+        sub._peer = peer // bind sub to peer
         sub._transition(ESTABLISHED)
       } // else ignore message
     } else {
@@ -88,21 +88,59 @@ class SubstreamRouter {
     }
   }
 
-  transmit (buffer) {
-    if (!this.feed.stream.writable) {
-      return console.warn('Substream trying to write to non writable stream')
-    }
-    this.feed.extension(EXTENSION, buffer)
+  emitStream (ev, ...payload) {
+    // this.stream.emit(ev, ...payload)
   }
 
-  emitStream (ev, ...payload) {
-    this.feed.stream.emit(ev, ...payload)
+  open (name, opts = {}, cb) {
+    if (typeof opts === 'function') return this.open(name, undefined, opts)
+    if (typeof name === 'string') name = Buffer.from(name)
+
+    assert(Buffer.isBuffer(name), '"namespace" must be a String or a Buffer')
+
+    // Detect duplicate namespaces
+    if (this._nameTable[name.toString('utf8')]) {
+      const err = new NamespaceConflictError(name)
+      if (typeof cb === 'function') return cb(err)
+      else throw err
+    }
+
+    const sub = new SubStream(this, name, opts)
+
+    if (typeof cb === 'function') {
+      let invkd = false
+      sub.once('connected', () => {
+        if (invkd) return
+        cb(null, sub)
+        invkd = true
+      })
+      sub.once('error', err => {
+        if (invkd) return
+        cb(err)
+        invkd = true
+      })
+    }
+
+    const handshakeTimeout = opts.timeout || 5000 // default 5 sec
+    let timeWaited = 0
+    const broadcast = () => {
+      setTimeout(() => {
+        if (sub.state !== INIT) return
+        timeWaited += RETRY_INTERVAL
+        if (timeWaited > handshakeTimeout) return sub._transition(CLOSING, new Error('HandshakeTimeoutError'))
+        sub._sendHandshake()
+        broadcast()
+      }, RETRY_INTERVAL)
+    }
+    broadcast()
+
+    return sub
   }
 }
 
 const randbytes = (n) => Buffer.from(Array.from(new Array(n)).map(i => Math.floor(0xff * Math.random())))
 class SubStream extends Duplex {
-  constructor (feed, name, opts = {}) {
+  constructor (router, name, opts = {}) {
     super(Object.assign({}, opts, { allowHalfOpen: false }))
     this.pause()
     this.cork()
@@ -111,7 +149,7 @@ class SubStream extends Duplex {
     this.state = INIT
     this.lastError = null
 
-    this.router = feed.__subrouter
+    this.router = router
     this.router.addSub(this)
 
     this.debug = _debug(`substream/R ${this.router.id} S ${this.id}`)
@@ -120,12 +158,12 @@ class SubStream extends Duplex {
 
   _write (chunk, enc, done) {
     // this.debug('DATA sub => remote', chunk.toString())
-    const bin = SubstreamOp.encode({
+    const msg = {
       id: encId(this.id),
       op: OP_DATA,
       data: chunk
-    })
-    this.router.transmit(bin)
+    }
+    this.router.send(msg, this._peer)
     nextTick(done)
   }
 
@@ -140,22 +178,21 @@ class SubStream extends Duplex {
   }
 
   _sendHandshake () {
-    this.debug('Sending handshake, ns:', this.name.hexSlice())
-
-    this.router.transmit(SubstreamOp.encode({
+    this.debug('Sending handshake, ns:', this.name.toString())
+    this.router.broadcast({
       id: encId(this.id),
       op: OP_START_STREAM,
       data: this.name
-    }))
+    })
   }
 
   _sendClosing () {
     this.debug('Sending close stream op')
-    this.router.transmit(SubstreamOp.encode({
+    this.router.send({
       id: encId(this.id),
       op: OP_CLOSE_STREAM,
       data: this.name
-    }))
+    }, this._peer)
   }
 
   _transition (nstate, err, finalize) {
@@ -171,7 +208,9 @@ class SubStream extends Duplex {
             this.resume()
             this.state = nstate
             this.emit('connected')
-            this.router.emitStream('substream-connected', this)
+            if (typeof this.router.handlers.onsubconnect === 'function') {
+              this.router.handlers.onsubconnect(this)
+            }
             break
           case CLOSING:
             this.state = nstate
@@ -204,7 +243,9 @@ class SubStream extends Duplex {
             this.state = nstate
             this.router.delSub(this)
             if (typeof finalize === 'function') finalize()
-            this.router.emitStream('substream-disconnected', this)
+            if (typeof this.router.handlers.onsubclose === 'function') {
+              this.router.handlers.onsubclose(this)
+            }
             break
           default:
             throw new Error('IllegalTransitionError' + nstate)
@@ -242,69 +283,7 @@ class SubStream extends Duplex {
   }
 }
 
-/*
- * protofeed refers to an instance of a 'protocol'-feed:
- * https://github.com/mafintosh/hypercore-protocol/blob/master/feed.js
- * an object that belongs to the stream, and emits/writes 'extension' messages
- */
-const substream = (feed, name, opts = {}, cb) => {
-  if (typeof name === 'function') return substream(feed, undefined, undefined, name)
-  if (typeof opts === 'function') return substream(feed, name, undefined, opts)
-
-  // assert that we received a protofeed instance.
-  assert(typeof feed.extension === 'function', 'dosen\'t quack like a hypercore-protocol feed instance')
-  assert(feed.stream)
-  assert(!feed.stream.destroyed, 'Can\'t initalize substream on an already destroyed stream')
-  if (typeof name === 'string') name = Buffer.from(name)
-  assert(Buffer.isBuffer(name), '"namespace" must be a String or a Buffer')
-
-  // Install router into feed if missing.
-  if (!feed.__subrouter) {
-    feed.__subrouter = new SubstreamRouter(feed)
-  }
-
-  // Detect duplicate namespaces
-  const router = feed.__subrouter
-  if (router._nameTable[name.toString('utf8')]) {
-    const err = new NamespaceConflictError(name)
-    if (typeof cb === 'function') return cb(err)
-    else throw err
-  }
-
-  const sub = new SubStream(feed, name, opts, cb)
-
-  if (typeof cb === 'function') {
-    let invkd = false
-    sub.once('connected', () => {
-      if (invkd) return
-      cb(null, sub)
-      invkd = true
-    })
-    sub.once('error', err => {
-      if (invkd) return
-      cb(err)
-      invkd = true
-    })
-  }
-
-  const handshakeTimeout = opts.timeout || 5000 // default 5 sec
-  let timeWaited = 0
-  const broadcast = () => {
-    setTimeout(() => {
-      if (sub.state !== INIT) return
-      timeWaited += RETRY_INTERVAL
-      if (timeWaited > handshakeTimeout) return sub._transition(CLOSING, new Error('HandshakeTimeoutError'))
-      sub._sendHandshake()
-      broadcast()
-    }, RETRY_INTERVAL)
-  }
-  broadcast()
-
-  return sub
-}
-
-module.exports = substream
-module.exports.EXTENSION = 'substream'
+module.exports = SubstreamRouter
 
 function encId (id) {
   return Buffer.from([(id >> 8) & 0xff, id & 0xff])
