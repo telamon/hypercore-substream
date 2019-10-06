@@ -92,6 +92,7 @@ test('virtual channels on decentstack PeerConnection', t => {
   subA2.write(msg2)
 })
 
+// TODO: requires hypercore to support extensions.
 test.skip('Stresstest: Multiplexing channels', t => {
   const nCores = 300
   t.plan(1 + nCores * 8)
@@ -110,10 +111,8 @@ test.skip('Stresstest: Multiplexing channels', t => {
   const key = Buffer.alloc(32)
   key.write('encryption secret')
 
-  const stream1 = protocol({
-    extensions: [substream.EXTENSION],
-    live: true
-  })
+  const stream1 = new Protocol(true)
+  stream1.prefinalize.wait()
 
   const vfeed1 = stream1.feed(key)
 

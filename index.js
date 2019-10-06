@@ -3,7 +3,6 @@ const assert = require('assert')
 const { Duplex } = require('stream')
 const { nextTick } = process
 const { SubstreamOp } = require('./messages')
-const { isProtocolStream } = require('hypercore-protocol')
 
 const INIT = 'INIT'
 const ESTABLISHED = 'ESTABLISHED'
@@ -18,12 +17,14 @@ const RETRY_INTERVAL = 300
 
 class SubstreamRouter {
   get name () { return 'substream' }
-  constructor () {
+  constructor (opts = {}) {
     this.encoding = SubstreamOp
     this.id = randbytes(2).hexSlice()
     this.subs = []
     this._ridTable = {}
     this._nameTable = {}
+    this.handlers = opts
+
     // TODO: stream is not guaranteed in extension space
     this._onUnpipe = this._onUnpipe.bind(this)
     // this.stream.once('unpipe', this._onUnpipe)
@@ -68,7 +69,10 @@ class SubstreamRouter {
     if (msg.op === OP_START_STREAM) {
       // console.log('Received hanshake ns:', msg.data.hexSlice)
       const sub = this._nameTable[msg.data.toString('utf8')]
-      if (!sub) return this.emitStream('substream-discovered', msg.data.toString('utf8'))
+      if (!sub) {
+        if (typeof this.handlers.onsubdiscovery === 'function') this.handlers.onsubdiscovery(msg.data.toString('utf8'), peer)
+        return
+      }
 
       // Link remote sub to local sub
       if (sub.state === INIT) {
@@ -204,7 +208,9 @@ class SubStream extends Duplex {
             this.resume()
             this.state = nstate
             this.emit('connected')
-            this.router.emitStream('substream-connected', this)
+            if (typeof this.router.handlers.onsubconnect === 'function') {
+              this.router.handlers.onsubconnect(this)
+            }
             break
           case CLOSING:
             this.state = nstate
@@ -237,7 +243,9 @@ class SubStream extends Duplex {
             this.state = nstate
             this.router.delSub(this)
             if (typeof finalize === 'function') finalize()
-            this.router.emitStream('substream-disconnected', this)
+            if (typeof this.router.handlers.onsubclose === 'function') {
+              this.router.handlers.onsubclose(this)
+            }
             break
           default:
             throw new Error('IllegalTransitionError' + nstate)
@@ -274,12 +282,6 @@ class SubStream extends Duplex {
     }
   }
 }
-
-/*
- * protofeed refers to an instance of a 'protocol'-feed:
- * https://github.com/mafintosh/hypercore-protocol/blob/master/feed.js
- * an object that belongs to the stream, and emits/writes 'extension' messages
- */
 
 module.exports = SubstreamRouter
 
