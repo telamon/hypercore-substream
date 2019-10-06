@@ -32,7 +32,7 @@ const remoteSub = vnetB.open('nameofsub')
 remoteSub.on('data', chunk => console.log('Recv data:', chunk.toString())
 
 // Connect event signals that both ends are ready
-virtual.once('connect', () => {
+localSub.once('connect', () => {
   localSub.write('Hello Underworld!')
 })
 ```
