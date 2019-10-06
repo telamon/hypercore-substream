@@ -1,6 +1,6 @@
 {
-  "name": "hypercore-protocol-substream",
-  "version": "2.0.7",
+  "name": "hypercore-substream",
+  "version": "3.0.0",
   "description": "Create independent virtual streams on a hypercore-protocol stream",
   "main": "index.js",
   "scripts": {
